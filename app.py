@@ -6,55 +6,67 @@ import io
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Sanitizador Elo Brindes", layout="wide", page_icon="🚚")
 
-st.markdown("## 🚚 Sanitizador de Endereços (CEP + Layout Final)")
+st.markdown("## 🚚 ELO-Normalizador Automático de Endereços (CEP + Layout Final) 🚚 ")
 
-# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO) ---
+# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO 2.0) ---
 
 def extrair_cep_bruto(texto):
     if not isinstance(texto, str): return None
     
-    # 1. LIMPEZA DE LIXO (O Pulo do Gato para seu erro)
-    # Remove aspas, aspas simples e espaços das pontas
+    # 1. LIMPEZA INICIAL
+    # Remove aspas e espaços das pontas
     texto_limpo = texto.replace('"', '').replace("'", "").strip()
     
-    # 2. PROCURA 1: Padrão Formatado (Com traço)
-    # Ex: 12.345-678 ou 12345-678
-    match_formatado = re.search(r'\d{2}\.?\d{3}-\d{3}', texto_limpo)
+    # 2. PROCURA 1: Padrão Formatado (Com traço, ponto ou espaço)
+    # Ex: 12.345-678, 12345-678 ou 12 345-678 (Corrigido para aceitar espaço)
+    match_formatado = re.search(r'\b\d{2}[. ]?\d{3}-\d{3}\b', texto_limpo)
     if match_formatado:
          return re.sub(r'\D', '', match_formatado.group(0))
     
     # 3. PROCURA 2: Palavra "CEP" seguida de números
+    # Remove traços e pontos temporariamente para achar "CEP 12345678"
     match_palavra = re.search(r'(?:CEP|C\.E\.P).{0,5}?(\d{8})', re.sub(r'[-.]', '', texto_limpo), re.IGNORECASE)
     if match_palavra:
         return match_palavra.group(1)
 
-    # 4. PROCURA 3 (NUCLEAR): Qualquer sequência de 8 dígitos SOLTOS
-    # Procura por exatos 8 digitos que não sejam parte de um numero maior (tipo CNPJ)
-    # O regex abaixo procura 8 digitos isolados ou no fim da linha
+    # 4. PROCURA 3 (PADRÃO): 8 dígitos SOLTOS
     match_8_digitos = re.search(r'(?<!\d)(\d{8})(?!\d)', texto_limpo)
     if match_8_digitos:
         return match_8_digitos.group(1)
+        
+    # 5. PROCURA 4 (SALVA VIDAS - CORREÇÃO DO EXCEL): 7 dígitos soltos
+    # O Excel remove o zero à esquerda (Ex: 04151-100 vira 4151100).
+    # Se acharmos 7 digitos isolados, assumimos que é CEP e devolvemos o zero.
+    match_7_digitos = re.search(r'(?<!\d)(\d{7})(?!\d)', texto_limpo)
+    if match_7_digitos:
+        return "0" + match_7_digitos.group(1)
         
     return None
 
 def extrair_numero_inteligente(texto):
     if not isinstance(texto, str): return ""
-    texto_upper = texto.upper().replace('"', '').strip() # Limpa aspas aqui tb
+    texto_upper = texto.upper().replace('"', '').strip()
     
+    # Procura S/N explícito
     if re.search(r'\b(S/N|SN|S\.N|SEM N|S-N)\b', texto_upper): return "S/N"
     
+    # Padrão: Rua Tal, 123 - Bairro
     match_hifen = re.search(r'\s[-–]\s*(\d+)\s*(?:[-–]|$)', texto_upper)
     if match_hifen: return match_hifen.group(1)
 
+    # Padrão: Rua Tal, 123, Bairro
     match_meio = re.search(r',\s*(\d+)\s*(?:-|,|;|/|AP|BL)', texto_upper)
     if match_meio: return match_meio.group(1)
 
+    # Padrão: Rua Tal nº 123
     match_n = re.search(r'(?:nº|n|num)\.?\s*(\d+)', texto_upper, re.IGNORECASE)
     if match_n: return match_n.group(1)
     
+    # Padrão simples: Vírgula e numero
     match_virgula = re.search(r',\s*(\d+)', texto_upper)
     if match_virgula: return match_virgula.group(1)
 
+    # Padrão final de linha: Rua Tal 123
     match_fim = re.search(r'\s(\d+)$', texto_upper)
     if match_fim: return match_fim.group(1)
         
@@ -74,10 +86,10 @@ def gerar_status(cep, numero):
 def processar_planilha(df, col_map):
     df = df.copy()
     
-    # 1. Cria ID Sequencial (ID_1, ID_2...)
+    # 1. Cria ID Sequencial
     df['ID_Personalizado'] = [f'ID_{i+1}' for i in range(len(df))]
     
-    # 2. Mapeia colunas
+    # 2. Mapeia colunas simples
     df['Nome_Final'] = df[col_map['nome']] if col_map['nome'] else ""
     df['Cidade_Final'] = df[col_map['cidade']] if col_map['cidade'] else ""
     df['UF_Final'] = df[col_map['uf']] if col_map['uf'] else ""
@@ -86,19 +98,28 @@ def processar_planilha(df, col_map):
     
     col_endereco = col_map['endereco']
     
-    # 3. Extrações
+    # 3. Extrações (CEP e Número)
+    # Garante que a coluna de endereço seja string antes de processar
+    df[col_endereco] = df[col_endereco].astype(str)
+    
     df['CEP_Final'] = df[col_endereco].apply(extrair_cep_bruto)
     df['Numero_Final'] = df[col_endereco].apply(extrair_numero_inteligente)
     
-    # 4. Limpeza do Logradouro
+    # 4. Limpeza do Logradouro (Remove o que já achamos)
     def limpar_texto(row):
-        txt = str(row[col_endereco]).replace('"', '').replace("'", "") # Tira aspas
+        txt = str(row[col_endereco]).replace('"', '').replace("'", "")
         cep = row['CEP_Final']
         num = row['Numero_Final']
         
+        # Se achou CEP, remove ele do texto para limpar
         if cep:
+            # Tenta remover formato formatado e formato limpo
             txt = re.sub(rf'{cep[:5]}.?{cep[5:]}', '', txt) 
             txt = re.sub(rf'{cep}', '', txt)
+            # Remove CEP de 7 digitos se foi o caso
+            if cep.startswith('0'):
+                cep_sem_zero = cep[1:]
+                txt = re.sub(rf'{cep_sem_zero}', '', txt)
             
         if num and num != "S/N":
             txt = re.sub(rf'\b{num}\b', '', txt)
@@ -116,7 +137,7 @@ def processar_planilha(df, col_map):
     # 6. Status
     df['STATUS_SISTEMA'] = df.apply(lambda x: gerar_status(x['CEP_Final'], x['Numero_Final']), axis=1)
     
-    # Ordena por erro
+    # Ordena colocando os erros primeiro
     df = df.sort_values(by=['STATUS_SISTEMA'], ascending=False)
     
     return df
@@ -128,6 +149,8 @@ uploaded_file = st.file_uploader("📂 Importar Planilha (.xlsx)", type=['xlsx']
 if uploaded_file:
     try:
         df = pd.read_excel(uploaded_file)
+        # Converte tudo para string para evitar erros de leitura
+        df = df.astype(str).replace('nan', '')
         cols = list(df.columns)
         
         st.write("### ⚙️ Mapeamento de Colunas")
@@ -162,10 +185,10 @@ if uploaded_file:
         }
 
         if st.button("🚀 Processar"):
-            with st.spinner('Lendo dados...'):
+            with st.spinner('O Robô está trabalhando...'):
                 df_processado = processar_planilha(df, col_map)
             
-            st.success("Feito!")
+            st.success("Processamento concluído!")
             
             # ORDEM FINAL PEDIDA
             ordem_final_colunas = [
