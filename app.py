@@ -8,7 +8,7 @@ st.set_page_config(page_title="🚚 ELO-Normalizador Automático de Endereços",
 
 st.markdown("## 🚚 ELO-Normalizador Automático de Endereços (CEP + Layout Final) 🚚 ")
 
-# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO 3.3) ---
+# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO 3.4) ---
 
 def extrair_cep_bruto(texto):
     if not isinstance(texto, str): return None
@@ -41,15 +41,33 @@ def extrair_cep_bruto(texto):
 def extrair_numero_inteligente(texto):
     if not isinstance(texto, str): return ""
     
-    # LIMPEZA CRÍTICA: Remove aspas
+    # LIMPEZA CRÍTICA: Remove aspas e converte para MAIÚSCULO (Resolve o problema de 'apto' vs 'APTO')
     texto_upper = texto.upper().replace('"', '').strip()
 
-    # --- VACINA ANTI-COMPLEMENTO (NOVO) ---
-    # Remove padrões como "Apto 102", "Lote 4", "Casa 2", "Bl 5" ANTES de procurar o número.
-    # Assim, o robô ignora esses números secundários e foca no número principal da rua.
-    # Regex: Palavra chave + Ponto opcional + Espaço + Digitos + Letra opcional (ex: 22F)
-    termos_proibidos = r'\b(?:APTO|AP|APARTAMENTO|LOTE|LT|CASA|CS|BLOCO|BL|SALA|SL|LOJA|ANDAR|UNIDADE|FRENTE|FUNDOS|QD|QUADRA)\.?\s*\d+[A-Z]?\b'
-    texto_upper = re.sub(termos_proibidos, '', texto_upper, flags=re.IGNORECASE)
+    # --- VACINA ANTI-COMPLEMENTO (TURBINADA) ---
+    # Remove qualquer combinação de termos que indicam complemento seguido de número.
+    # Ex: "Apt 102", "Cs 3", "Lt 45B", "Sala 10"
+    
+    lista_proibida = [
+        r'APTO', r'APT', r'AP', r'APARTAMENTO', r'APART',  # Apartamentos
+        r'LOTE', r'LT', r'LOT',                            # Lotes
+        r'CASA', r'CS', r'CN',                             # Casas
+        r'BLOCO', r'BL',                                   # Blocos
+        r'SALA', r'SL', r'CJ', r'CONJUNTO',                # Salas/Conjuntos
+        r'LOJA', r'LJ',                                    # Lojas
+        r'ANDAR', r'AND',                                  # Andares
+        r'UNIDADE', r'UNID',                               # Unidades
+        r'FRENTE', r'FD', r'FUNDOS', r'FDS',               # Fundos/Frente
+        r'QD', r'QUADRA',                                  # Quadras
+        r'BOX', r'GARAGEM',                                # Box
+        r'KM'                                              # Quilometragem (Rodovias)
+    ]
+    
+    # Cria o regex gigante: (?:APTO|APT|...)\.?\s*\d+[A-Z]?
+    regex_proibidos = r'\b(?:' + '|'.join(lista_proibida) + r')\.?\s*\d+[A-Z]?\b'
+    
+    # Aplica a vacina: Apaga esses termos do texto que o robô lê
+    texto_upper = re.sub(regex_proibidos, '', texto_upper, flags=re.IGNORECASE)
 
     # --- TRAVA DE SEGURANÇA (CEP) ---
     # 1. Remove CEPs formatados (81280-430)
