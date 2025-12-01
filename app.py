@@ -8,7 +8,7 @@ st.set_page_config(page_title="🚚 ELO-Normalizador Automático de Endereços",
 
 st.markdown("## 🚚 ELO-Normalizador Automático de Endereços (CEP + Layout Final) 🚚 ")
 
-# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO 3.0) ---
+# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO 3.2) ---
 
 def extrair_cep_bruto(texto):
     if not isinstance(texto, str): return None
@@ -44,12 +44,14 @@ def extrair_numero_inteligente(texto):
     # LIMPEZA CRÍTICA: Remove aspas
     texto_upper = texto.upper().replace('"', '').strip()
 
-    # --- NOVIDADE: A TRAVA DE SEGURANÇA ---
-    # 1. Remove qualquer sequência numérica de 7 dígitos ou mais (CEPs sem traço, telefones)
-    # Isso evita que o regex ache que "09271060" é o número da casa.
+    # --- TRAVA DE SEGURANÇA (Para não pegar o CEP como número) ---
+    # 1. Remove CEPs formatados (81280-430) para evitar que partes dele virem número
+    texto_upper = re.sub(r'\b\d{5}[-.]?\d{3}\b', '', texto_upper)
+    
+    # 2. Remove qualquer sequência gigante (7+ dígitos)
     texto_limpo_numeros = re.sub(r'\d{7,}', '', texto_upper)
 
-    # Função auxiliar: Só aceita se tiver até 6 dígitos (Ninguém mora na casa 1 milhão)
+    # Função auxiliar: Só aceita se tiver até 6 dígitos
     def eh_valido(n):
         return len(n) <= 6
 
@@ -58,28 +60,32 @@ def extrair_numero_inteligente(texto):
     # 1. Procura S/N explícito
     if re.search(r'\b(S/N|SN|S\.N|SEM N|S-N)\b', texto_limpo_numeros): return "S/N"
     
-    # 2. Padrão: Rua Tal, 123 - Bairro
+    # 2. (NOVO) Padrão: Número seguido de VÍRGULA (Ex: Rua Tal 57, Ap 22)
+    # Isso resolve o caso "Rua Anna... 57, ap..."
+    match_antes_virgula = re.search(r'\b(\d+)\s*,', texto_limpo_numeros)
+    if match_antes_virgula and eh_valido(match_antes_virgula.group(1)): return match_antes_virgula.group(1)
+
+    # 3. Padrão: Rua Tal, 123 - Bairro (Hífen antes ou depois)
     match_hifen = re.search(r'\s[-–]\s*(\d+)\s*(?:[-–]|$)', texto_limpo_numeros)
     if match_hifen and eh_valido(match_hifen.group(1)): return match_hifen.group(1)
 
-    # 3. Padrão: Rua Tal, 123, Bairro
+    # 4. Padrão: Rua Tal, 123, Bairro (Vírgula antes)
     match_meio = re.search(r',\s*(\d+)\s*(?:-|,|;|/|AP|BL)', texto_limpo_numeros)
     if match_meio and eh_valido(match_meio.group(1)): return match_meio.group(1)
 
-    # 4. Padrão: Rua Tal nº 123
+    # 5. Padrão: Rua Tal nº 123
     match_n = re.search(r'(?:nº|n|num)\.?\s*(\d+)', texto_limpo_numeros, re.IGNORECASE)
     if match_n and eh_valido(match_n.group(1)): return match_n.group(1)
     
-    # 5. Padrão simples: Vírgula e numero
+    # 6. Padrão simples: Vírgula e numero (Genérico)
     match_virgula = re.search(r',\s*(\d+)', texto_limpo_numeros)
     if match_virgula and eh_valido(match_virgula.group(1)): return match_virgula.group(1)
 
-    # 6. Padrão final de linha: Rua Tal 123
+    # 7. Padrão final de linha: Rua Tal 123
     match_fim = re.search(r'\s(\d+)$', texto_limpo_numeros)
     if match_fim and eh_valido(match_fim.group(1)): return match_fim.group(1)
     
     # --- BUSCA DE VARREDURA (Último Recurso) ---
-    # Se os padrões falharam, pega o primeiro número "pequeno" que sobrou na string limpa
     numeros_soltos = re.findall(r'\d+', texto_limpo_numeros)
     for n in numeros_soltos:
         if eh_valido(n):
