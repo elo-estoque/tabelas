@@ -4,27 +4,24 @@ import re
 import io
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="🚚 ELO-Normalizador Automático de Endereços (CEP + Layout Final) 🚚", layout="wide", page_icon="🚚")
+st.set_page_config(page_title="🚚 ELO-Normalizador Automático de Endereços", layout="wide", page_icon="🚚")
 
 st.markdown("## 🚚 ELO-Normalizador Automático de Endereços (CEP + Layout Final) 🚚 ")
 
-# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO 2.0) ---
+# --- FUNÇÕES DE EXTRAÇÃO (O ROBÔ BLINDADO 3.0) ---
 
 def extrair_cep_bruto(texto):
     if not isinstance(texto, str): return None
     
     # 1. LIMPEZA INICIAL
-    # Remove aspas e espaços das pontas
     texto_limpo = texto.replace('"', '').replace("'", "").strip()
     
     # 2. PROCURA 1: Padrão Formatado (Com traço, ponto ou espaço)
-    # Ex: 12.345-678, 12345-678 ou 12 345-678 (Corrigido para aceitar espaço)
     match_formatado = re.search(r'\b\d{2}[. ]?\d{3}-\d{3}\b', texto_limpo)
     if match_formatado:
          return re.sub(r'\D', '', match_formatado.group(0))
     
     # 3. PROCURA 2: Palavra "CEP" seguida de números
-    # Remove traços e pontos temporariamente para achar "CEP 12345678"
     match_palavra = re.search(r'(?:CEP|C\.E\.P).{0,5}?(\d{8})', re.sub(r'[-.]', '', texto_limpo), re.IGNORECASE)
     if match_palavra:
         return match_palavra.group(1)
@@ -35,8 +32,6 @@ def extrair_cep_bruto(texto):
         return match_8_digitos.group(1)
         
     # 5. PROCURA 4 (SALVA VIDAS - CORREÇÃO DO EXCEL): 7 dígitos soltos
-    # O Excel remove o zero à esquerda (Ex: 04151-100 vira 4151100).
-    # Se acharmos 7 digitos isolados, assumimos que é CEP e devolvemos o zero.
     match_7_digitos = re.search(r'(?<!\d)(\d{7})(?!\d)', texto_limpo)
     if match_7_digitos:
         return "0" + match_7_digitos.group(1)
@@ -45,30 +40,50 @@ def extrair_cep_bruto(texto):
 
 def extrair_numero_inteligente(texto):
     if not isinstance(texto, str): return ""
+    
+    # LIMPEZA CRÍTICA: Remove aspas
     texto_upper = texto.upper().replace('"', '').strip()
-    
-    # Procura S/N explícito
-    if re.search(r'\b(S/N|SN|S\.N|SEM N|S-N)\b', texto_upper): return "S/N"
-    
-    # Padrão: Rua Tal, 123 - Bairro
-    match_hifen = re.search(r'\s[-–]\s*(\d+)\s*(?:[-–]|$)', texto_upper)
-    if match_hifen: return match_hifen.group(1)
 
-    # Padrão: Rua Tal, 123, Bairro
-    match_meio = re.search(r',\s*(\d+)\s*(?:-|,|;|/|AP|BL)', texto_upper)
-    if match_meio: return match_meio.group(1)
+    # --- NOVIDADE: A TRAVA DE SEGURANÇA ---
+    # 1. Remove qualquer sequência numérica de 7 dígitos ou mais (CEPs sem traço, telefones)
+    # Isso evita que o regex ache que "09271060" é o número da casa.
+    texto_limpo_numeros = re.sub(r'\d{7,}', '', texto_upper)
 
-    # Padrão: Rua Tal nº 123
-    match_n = re.search(r'(?:nº|n|num)\.?\s*(\d+)', texto_upper, re.IGNORECASE)
-    if match_n: return match_n.group(1)
+    # Função auxiliar: Só aceita se tiver até 6 dígitos (Ninguém mora na casa 1 milhão)
+    def eh_valido(n):
+        return len(n) <= 6
+
+    # --- BUSCAS PADRÃO ---
+
+    # 1. Procura S/N explícito
+    if re.search(r'\b(S/N|SN|S\.N|SEM N|S-N)\b', texto_limpo_numeros): return "S/N"
     
-    # Padrão simples: Vírgula e numero
-    match_virgula = re.search(r',\s*(\d+)', texto_upper)
-    if match_virgula: return match_virgula.group(1)
+    # 2. Padrão: Rua Tal, 123 - Bairro
+    match_hifen = re.search(r'\s[-–]\s*(\d+)\s*(?:[-–]|$)', texto_limpo_numeros)
+    if match_hifen and eh_valido(match_hifen.group(1)): return match_hifen.group(1)
 
-    # Padrão final de linha: Rua Tal 123
-    match_fim = re.search(r'\s(\d+)$', texto_upper)
-    if match_fim: return match_fim.group(1)
+    # 3. Padrão: Rua Tal, 123, Bairro
+    match_meio = re.search(r',\s*(\d+)\s*(?:-|,|;|/|AP|BL)', texto_limpo_numeros)
+    if match_meio and eh_valido(match_meio.group(1)): return match_meio.group(1)
+
+    # 4. Padrão: Rua Tal nº 123
+    match_n = re.search(r'(?:nº|n|num)\.?\s*(\d+)', texto_limpo_numeros, re.IGNORECASE)
+    if match_n and eh_valido(match_n.group(1)): return match_n.group(1)
+    
+    # 5. Padrão simples: Vírgula e numero
+    match_virgula = re.search(r',\s*(\d+)', texto_limpo_numeros)
+    if match_virgula and eh_valido(match_virgula.group(1)): return match_virgula.group(1)
+
+    # 6. Padrão final de linha: Rua Tal 123
+    match_fim = re.search(r'\s(\d+)$', texto_limpo_numeros)
+    if match_fim and eh_valido(match_fim.group(1)): return match_fim.group(1)
+    
+    # --- BUSCA DE VARREDURA (Último Recurso) ---
+    # Se os padrões falharam, pega o primeiro número "pequeno" que sobrou na string limpa
+    numeros_soltos = re.findall(r'\d+', texto_limpo_numeros)
+    for n in numeros_soltos:
+        if eh_valido(n):
+            return n
         
     return "" 
 
