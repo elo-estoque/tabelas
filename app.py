@@ -2,131 +2,165 @@ import streamlit as st
 import pandas as pd
 import re
 import io
-import requests
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Sanitizador de Endereços", layout="wide")
+st.set_page_config(page_title="Sanitizador Elo Brindes", layout="wide", page_icon="🚚")
 
-st.markdown("## 📦 Sanitizador de Endereços (Padrão Correios)")
-st.info("Suba a planilha, verifique os dados e baixe o arquivo pronto para gerar etiquetas.")
+st.markdown("## 🚚 Sanitizador de Endereços (Inteligente)")
 
-# --- FUNÇÕES DE LIMPEZA ---
+# --- FUNÇÕES DE LIMPEZA AVANÇADA ---
 
 def extrair_cep(texto):
-    # Procura CEP no formato XXXXX-XXX ou XXXXXXXX
+    # Procura CEP (XXXXX-XXX ou XXXXXXXX)
     match = re.search(r'\b\d{5}-?\d{3}\b', str(texto))
-    return match.group(0).replace('-', '') if match else ""
+    return match.group(0).replace('-', '') if match else None
 
-def tentar_extrair_numero(texto):
-    # Tenta pegar números isolados no fim da string ou após vírgula
-    # Ex: "Rua tal, 123" -> 123
+def extrair_numero_inteligente(texto):
     if not isinstance(texto, str): return ""
-    match = re.search(r'(?:,|^)\s*(\d+\w?)\s*$', texto) # Padrão simples
-    if match:
-        return match.group(1)
+    texto = texto.upper().strip()
     
-    # Tentativa 2: Procura "n 123" ou "num 123"
-    match_n = re.search(r'(?:nº|n|num)\.?\s*(\d+)', texto, re.IGNORECASE)
+    # 1. Prioridade: Procura "S/N" ou "SEM NUMERO"
+    if re.search(r'\b(S/N|SN|S\.N|SEM N|S-N)\b', texto):
+        return "S/N"
+
+    # 2. Prioridade: Procura número entre vírgulas ou hífens (O SEU CASO)
+    # Ex: "Av Brasilia, 177 - 1 Piso" -> Pega o 177
+    # Explicação regex: Procura virgula, espaço, digitos, espaço, e depois traço ou virgula
+    match_meio = re.search(r',\s*(\d+)\s*(?:-|,|;)', texto)
+    if match_meio:
+        return match_meio.group(1)
+
+    # 3. Prioridade: Procura "nº 123"
+    match_n = re.search(r'(?:nº|n|num)\.?\s*(\d+)', texto)
     if match_n:
         return match_n.group(1)
-        
-    return ""
-
-def limpar_logradouro(texto, numero_encontrado):
-    # Remove o número do texto original para deixar só a rua
-    if not isinstance(texto, str): return ""
-    novo_texto = texto
-    if numero_encontrado:
-        novo_texto = novo_texto.replace(numero_encontrado, '').strip()
     
-    # Remove sufixos comuns de fim de linha
-    novo_texto = re.sub(r'[, -]+$', '', novo_texto)
-    return novo_texto
+    # 4. Prioridade: Número solto logo após uma vírgula (Ex: Rua X, 123)
+    match_virgula = re.search(r',\s*(\d+)', texto)
+    if match_virgula:
+        return match_virgula.group(1)
+
+    # 5. Última tentativa: Número no final da string
+    match_fim = re.search(r'\s(\d+)$', texto)
+    if match_fim:
+        return match_fim.group(1)
+        
+    return "" # Não achou nada
+
+def gerar_status(cep, numero):
+    status = []
+    # Lógica de aviso
+    if not cep:
+        status.append("🟢 SEM CEP") # Seu pedido: Verde para sem CEP
+    
+    if not numero:
+        status.append("⚠️ SEM NÚMERO")
+    elif numero == "S/N":
+        status.append("⚪ S/N")
+        
+    if not status:
+        return "✅ OK"
+    return " | ".join(status)
 
 def processar_planilha(df, col_endereco):
     df = df.copy()
     
-    # 1. Garante que as colunas existam
-    df['CEP_Estimado'] = df[col_endereco].apply(extrair_cep)
-    df['Numero_Estimado'] = df[col_endereco].apply(tentar_extrair_numero)
+    # Extrações
+    df['CEP_Final'] = df[col_endereco].apply(extrair_cep)
+    df['Numero_Final'] = df[col_endereco].apply(extrair_numero_inteligente)
     
-    # Tenta limpar o logradouro removendo o número
-    df['Logradouro_Estimado'] = df.apply(
-        lambda row: limpar_logradouro(row[col_endereco], row['Numero_Estimado']), axis=1
-    )
+    # Limpa o logradouro (Tenta tirar o CEP e o número do texto original para ficar limpo)
+    def limpar_texto(row):
+        txt = str(row[col_endereco])
+        # Remove CEP
+        if row['CEP_Final']:
+            txt = txt.replace(row['CEP_Final'], '').replace(row['CEP_Final'][:5]+'-'+row['CEP_Final'][5:], '')
+        # Remove Número (se achou)
+        if row['Numero_Final'] and row['Numero_Final'] != "S/N":
+            # Remove apenas se o número estiver isolado para não apagar parte de outra coisa
+            txt = re.sub(rf'\b{row["Numero_Final"]}\b', '', txt)
+        return txt.strip(' ,;-')
+
+    df['Logradouro_Final'] = df.apply(limpar_texto, axis=1)
+    df['Bairro_Final'] = "" # Bairro é difícil pegar sem API, deixa pro humano ou API futura
     
-    df['Bairro_Estimado'] = "" 
-    df['Complemento_Estimado'] = ""
+    # Gera Coluna de Status Visual
+    df['STATUS_SISTEMA'] = df.apply(lambda x: gerar_status(x['CEP_Final'], x['Numero_Final']), axis=1)
+    
+    # Ordena: Quem tem problema aparece primeiro!
+    df = df.sort_values(by=['STATUS_SISTEMA'], ascending=False)
     
     return df
 
 # --- INTERFACE ---
 
-uploaded_file = st.file_uploader("Arraste seu Excel aqui (.xlsx)", type=['xlsx'])
+uploaded_file = st.file_uploader("📂 Arraste o Excel aqui", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # Ler arquivo
     try:
-        df = pd.read_excel(uploaded_file)
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+            
+        st.write("### 1. Identifique a coluna do Endereço Completo")
         
-        # Seleção da coluna de endereço
+        # Tenta achar a coluna sozinho
         colunas = list(df.columns)
-        st.write("### 1. Selecione a coluna que tem o endereço completo:")
-        
-        # Tenta adivinhar qual é a coluna de endereço (se tiver "endereço" no nome)
         index_padrao = 0
         for i, col in enumerate(colunas):
             if "endereço" in col.lower() or "endereco" in col.lower():
                 index_padrao = i
                 break
-                
-        col_alvo = st.selectbox("Coluna de Endereço:", colunas, index=index_padrao)
+        
+        col_alvo = st.selectbox("Selecione a coluna:", colunas, index=index_padrao)
 
-        if st.button("Processar Dados"):
-            with st.spinner('Processando endereços...'):
+        if st.button("🚀 Processar Endereços"):
+            with st.spinner('O Robô está lendo...'):
                 df_processado = processar_planilha(df, col_alvo)
             
-            st.success("Processamento concluído! Valide os dados abaixo.")
-            st.warning("⚠️ A coluna 'Endereço Original' está bloqueada para manter a integridade.")
-
-            # --- CONFIGURAÇÃO DA TABELA EDITÁVEL ---
+            st.success("Pronto! Edite abaixo. (Linhas com problemas aparecem no topo)")
+            
+            # --- TABELA EDITÁVEL ---
             column_config = {
-                col_alvo: st.column_config.TextColumn(
-                    "Endereço Original (Bloqueado)",
-                    disabled=True, # <--- BLOQUEIO DE SEGURANÇA
-                    width="medium"
+                "STATUS_SISTEMA": st.column_config.TextColumn(
+                    "⚠️ Avisos do Robô",
+                    help="Verde: Sem CEP | Cinza: S/N | Amarelo: Falta Número",
+                    width="medium",
+                    disabled=True
                 ),
-                "Logradouro_Estimado": st.column_config.TextColumn("Logradouro (Rua/Av)", required=True),
-                "Numero_Estimado": st.column_config.TextColumn("Número", required=True),
-                "Bairro_Estimado": st.column_config.TextColumn("Bairro"),
-                "CEP_Estimado": st.column_config.TextColumn("CEP", required=True),
-                "Complemento_Estimado": st.column_config.TextColumn("Complemento"),
+                col_alvo: st.column_config.TextColumn("Endereço Original (Bloqueado)", disabled=True, width="large"),
+                "Logradouro_Final": st.column_config.TextColumn("Rua/Logradouro", width="large"),
+                "Numero_Final": st.column_config.TextColumn("Número", width="small"),
+                "CEP_Final": st.column_config.TextColumn("CEP", width="medium"),
+                "Bairro_Final": st.column_config.TextColumn("Bairro", width="medium"),
             }
-
-            # Mostra a tabela para edição
+            
+            # Colunas que queremos mostrar primeiro
+            cols_order = ["STATUS_SISTEMA", col_alvo, "Logradouro_Final", "Numero_Final", "CEP_Final", "Bairro_Final"]
+            # Adiciona o resto das colunas originais no fim, caso precise
+            cols_extra = [c for c in df.columns if c not in cols_order]
+            
             edited_df = st.data_editor(
-                df_processado,
+                df_processado[cols_order + cols_extra],
                 column_config=column_config,
                 num_rows="dynamic",
                 use_container_width=True,
-                height=600
+                height=800
             )
 
-            # --- EXPORTAÇÃO ---
-            st.write("### 3. Finalizar")
-            
-            # Botão de Download
+            # --- DOWNLOAD ---
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                edited_df.to_excel(writer, index=False, sheet_name='Etiquetas')
+                edited_df.to_excel(writer, index=False, sheet_name='Envio')
                 
             st.download_button(
-                label="⬇️ Baixar Planilha para Importação (Lote)",
+                label="💾 Baixar Planilha Pronta",
                 data=buffer,
-                file_name="Lote_Correios_Pronto.xlsx",
+                file_name="Enderecos_Corrigidos.xlsx",
                 mime="application/vnd.ms-excel",
                 type="primary"
             )
 
     except Exception as e:
-        st.error(f"Erro ao ler arquivo: {e}")
+        st.error(f"Erro: {e}")
