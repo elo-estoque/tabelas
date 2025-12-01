@@ -1,21 +1,18 @@
-FROM python:3.9-slim
+# Usa a imagem oficial completa (Resolve dependências e arquitetura automaticamente)
+FROM python:3.9
 
-# 1. Instala compiladores (Resolve o erro do Pandas e erro de arquitetura)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
+# Define o diretório de trabalho
 WORKDIR /app
 
-# 2. Copia e instala as bibliotecas
+# Copia e instala as dependências
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 3. Copia o resto do código
+# Copia o resto dos arquivos
 COPY . .
 
-# 4. Configura a porta
+# Expõe a porta correta
 EXPOSE 8501
 
-# 5. Comando de inicialização
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Comando de execução (Usando CMD que é mais seguro contra erros de formato)
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
