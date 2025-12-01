@@ -4,7 +4,7 @@ import re
 import io
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Sanitizador Elo Brindes", layout="wide", page_icon="🚚")
+st.set_page_config(page_title="🚚 ELO-Normalizador Automático de Endereços (CEP + Layout Final) 🚚", layout="wide", page_icon="🚚")
 
 st.markdown("## 🚚 ELO-Normalizador Automático de Endereços (CEP + Layout Final) 🚚 ")
 
