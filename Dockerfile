@@ -1,18 +1,22 @@
-# Usa a imagem oficial completa (Resolve dependências e arquitetura automaticamente)
-FROM python:3.9
+# 1. Escolhe a imagem base (Python leve)
+FROM python:3.11-slim
 
-# Define o diretório de trabalho
+# 2. Define o diretório de trabalho
 WORKDIR /app
 
-# Copia e instala as dependências
+# 3. Define a variável de ambiente para a porta
+ENV PORT 8000
+
+# 4. Instala dependências do sistema operacional necessárias
+RUN apt-get update && apt-get install -y gcc libffi-dev
+
+# 5. Instala as bibliotecas Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o resto dos arquivos
+# 6. Copia o código da API
 COPY . .
 
-# Expõe a porta correta
-EXPOSE 8501
-
-# Comando de execução (Usando CMD que é mais seguro contra erros de formato)
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# 7. O COMANDO CORRETO (AQUI ESTAVA O ERRO)
+# Não use "gunicorn" puro. Use "uvicorn" para garantir compatibilidade com FastAPI.
+CMD ["uvicorn", "normalizador_api:app", "--host", "0.0.0.0", "--port", "8000"]
